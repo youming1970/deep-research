@@ -1,0 +1,8 @@
+
+> open-deep-research@0.0.1 start
+> tsx --env-file=.env.local src/run.ts
+
+Using model: gemini-1.5-flash
+Gemini 模型 ID: gemini-1.5-flash, 提供者: google
+Using model:  gemini-1.5-flash
+What would you like to research? Enter research breadth (recommended 2-10, default 4): 

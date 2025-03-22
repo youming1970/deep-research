@@ -1,0 +1,94 @@
+核心目标仍然是解决数据接口不一致的问题，特别是围绕 `ai` 库和 Gemini API 之间的数据交换。
+
+**项目函数接口具体规则 (Deep-Research Project - Cursor Rules):**
+
+以下规则将针对 `ai.generateObject`, `gemini-provider.ts` 中的 `doGenerate`, `gemini-helper.ts` 中的 `generateJsonWithGemini` 和 `callGeminiAPI` 这四个关键函数，明确输入输出的数据类型和结构。
+
+**1. `ai.generateObject` 函数接口规则 (保持 ai 库原生接口，本项目适配层):**
+
+*   **规则 1.1: 输入参数类型**
+    *   `model`:  **类型:** `AIModel` (来自 `ai` 库)。 **规则:**  本项目 `createGeminiModel` 返回的对象必须符合 `AIModel` 接口定义。
+    *   `prompt`:  **类型:** `string | Array<{ role: string; content: string }>`。 **规则:**  必须同时支持字符串 prompt 和 OpenAI 风格的消息数组。
+    *   `system?`:  **类型:** `string | undefined`。 **规则:**  可选，字符串类型。
+    *   `schema`:  **类型:** `object` (Zod Schema 或 JSON Schema)。 **规则:**  必须能同时处理 Zod Schema 和标准 JSON Schema 对象。
+    *   `mode?`:  **类型:** `{ type: string; schema?: any } | undefined`。 **规则:**  可选，用于 `ai` 库内部模式控制，本项目需透传。
+    *   `temperature?`:  **类型:** `number | undefined`。 **规则:**  可选，数字类型，默认 0.7。
+    *   其他 `ai.generateObject` 参数:  **规则:**  本项目应尽量透传 `ai.generateObject` 支持的其他参数 (如 `abortSignal`, `cache` 等)，保持接口完整性。
+
+*   **规则 1.2: 输出结果结构**
+    *   **类型:** `Promise<{ response: ResponseObject; object: any; intermediate_steps: any[] }>`
+    *   `response`:  **类型:** `ResponseObject = { id: string; modelId: string; timestamp: string; usage: UsageObject }`
+        *   `usage`:  **类型:** `UsageObject = { inputTokens: number; outputTokens: number; totalTokens: number }`。 **规则:**  即使 Gemini API 不提供 token 信息，本项目**必须**返回符合 `UsageObject` 结构的对象，所有 token 计数可以设为 `0` 或估算值。
+    *   `object`:  **类型:** `any`。 **规则:**  根据 `schema` 结构化的 JSON 对象。
+    *   `intermediate_steps`:  **类型:** `any[]`。 **规则:**  Gemini 不提供中间步骤信息，本项目返回空数组 `[]`。
+
+*   **规则 1.3: 错误处理**
+    *   **规则:**  任何错误都应向上层 `ai` 库抛出，例如 API 调用失败、JSON 解析错误等。 确保 `ai.generateObject` 能捕获并处理这些错误。
+
+**2. `gemini-provider.ts` - `doGenerate` 方法接口规则 (本项目 Gemini 适配器核心):**
+
+*   **规则 2.1: 输入参数类型**
+    *   `messages?`:  **类型:** `SimpleMessage[] | undefined` (本项目自定义消息类型)。 **规则:**  可选，使用 `SimpleMessage` 类型数组。
+    *   `prompt?`:  **类型:** `string | {role: string; content: string | any[] }[] | undefined`。 **规则:**  可选，同时支持字符串 prompt 和 `ai.generateObject` 风格的 prompt 对象数组。
+    *   `system?`:  **类型:** `string | undefined`。 **规则:**  可选，字符串类型。
+    *   `schema?`:  **类型:** `any | undefined`。 **规则:**  可选，JSON Schema 或 Zod Schema 对象。
+    *   `mode?`:  **类型:** `{ type: string; schema?: any } | undefined`。 **规则:**  可选，透传 `ai.generateObject` 的 `mode` 参数。
+    *   `temperature?`:  **类型:** `number | undefined`。 **规则:**  可选，数字类型。
+
+*   **规则 2.2: 输出结果结构**
+    *   **类型:**  与 `ai.generateObject` 的输出结果类型**完全一致** (`Promise<{ response: ResponseObject; object: any; intermediate_steps: any[] }>`).
+    *   **规则:**  `doGenerate` 必须返回与 `ai.generateObject` 相同的输出结构，确保无缝对接。
+
+*   **规则 2.3: 数据转换**
+    *   **规则:**  `doGenerate` 负责将 `ai.generateObject` 的输入参数 (例如 `prompt`, `messages`, `schema`) 转换为 `generateJsonWithGemini` 函数可以接受的格式。 例如，从 `messages` 数组中提取最终 prompt 和 system prompt。
+
+*   **规则 2.4: 错误处理**
+    *   **规则:**  `doGenerate` 内部的错误 (例如 `generateJsonWithGemini` 抛出的错误) 需要捕获并处理。 可以选择向上层抛出，或者返回包含默认 `object: {}` 的成功响应 (如当前代码)。
+    *   **新增规则 2.5: 代码规范和类型定义**
+        *   **规则:**  为 `doGenerate` 方法的返回值定义明确的 TypeScript 接口类型，例如 `interface GeminiGenerateResponse { ... }`，并在 `providers.ts` 中使用该接口。 这有助于提高代码可读性和可维护性。
+
+*   **新增规则 2.6: 文档注释**
+    *   **规则:**  在 `providers.ts` 的 `createGeminiModelForAI` 函数和 `doGenerate` 方法中，添加详细的 JSDoc 注释。 特别是对于 `doGenerate` 的返回值结构，需要清晰地说明每个字段的用途、类型和格式要求。 重点解释 `text` 字段（`ai.generateObject` 内部检查）和 `timestamp` 字段（Date 对象类型）。
+
+*   **新增规则 2.7: 错误处理增强**
+    *   **规则:**  在 `doGenerate` 的 `catch` 错误处理块中，记录更详细的错误信息，例如原始错误对象、请求参数等。 考虑使用日志记录工具或方法，以便在出现问题时更容易追踪和诊断。
+
+*   **新增规则 2.8: API 密钥管理**
+    *   **规则:**  制定更完善的 Gemini API 密钥管理策略。  例如，使用环境变量安全地存储 API 密钥，并在代码中通过 `process.env.GEMINI_API_KEY` 安全访问。  考虑在开发和生产环境中使用不同的密钥管理方案。
+
+**3. `gemini-helper.ts` - `generateJsonWithGemini` 函数接口规则 (JSON 生成核心逻辑):**
+
+*   **规则 3.1: 输入参数类型**
+    *   `prompt`:  **类型:** `string`。 **规则:**  必须是字符串类型，已经包含了所有指令和 schema 描述的最终 prompt。
+    *   `system?`:  **类型:** `string | undefined`。 **规则:**  可选，字符串类型的 system prompt。
+    *   `schema?`:  **类型:** `any | undefined`。 **规则:**  可选，JSON Schema 或 Zod Schema 对象，用于日志记录和可能的提示构建 (虽然目前主要在 `doGenerate` 中处理 schema)。
+    *   `temperature?`:  **类型:** `number | undefined`。 **规则:**  可选，数字类型。
+
+*   **规则 3.2: 输出结果结构**
+    *   **类型:** `Promise<any>`。 **规则:**  直接返回解析后的 JSON 对象 (`JSON.parse(cleanedResponse)`)。
+
+*   **规则 3.3: 数据清理和解析**
+    *   **规则:**  `generateJsonWithGemini` 负责调用 `callGeminiAPI` 获取原始文本响应，然后进行必要的清理 (`cleanResponse`)，并尝试用 `JSON.parse` 解析为 JSON 对象。
+
+*   **规则 3.4: 错误处理**
+    *   **规则:**  如果 JSON 解析失败，`generateJsonWithGemini` 应该捕获 `JSON.parse` 错误，记录错误信息 (包括原始响应和清理后的响应)，并 **返回一个空对象 `{}`**  (如当前代码)。  `generateJsonWithGemini` 内部不应向上层抛出错误，而是通过返回空对象来表示生成失败。
+
+**4. `gemini-helper.ts` - `callGeminiAPI` 函数接口规则 (直接调用 Gemini API):**
+
+*   **规则 4.1: 输入参数类型**
+    *   `prompt`:  **类型:** `string`。 **规则:**  最终的、包含 JSON 指令的提示字符串。
+    *   `system?`:  **类型:** `string | undefined`。 **规则:**  可选，系统提示字符串。
+    *   `temperature?`:  **类型:** `number | undefined`。 **规则:**  可选，数字类型。
+
+*   **规则 4.2: 输出结果结构**
+    *   **类型:** `Promise<string>`。 **规则:**  返回 Gemini API 原始的文本响应字符串。
+
+*   **规则 4.3: API 调用和 HTTP 错误处理**
+    *   **规则:**  `callGeminiAPI` 负责直接调用 Gemini API (通过 `fetch` 或 Google Gemini SDK)。
+    *   **规则:**  必须检查 HTTP 响应状态码。如果状态码不是 200 OK，应该抛出错误，例如 `throw new Error(\`HTTP error! Status: ${response.status}\`)`。 确保上层函数能捕获这些 HTTP 错误。
+
+**总结:**
+
+以上规则详细定义了本项目关键函数的接口规范，包括输入输出类型、数据结构、数据转换和错误处理。 核心是 **保持 `ai.generateObject` 接口不变，并确保我们的 Gemini 适配器 (`doGenerate`, `generateJsonWithGemini`, `callGeminiAPI`)  严格遵循这些规则，实现与 `ai` 库的无缝集成。**  同时，为了代码质量和可维护性，需要 **加强代码规范、文档注释、错误处理和 API 密钥管理**。
+
+
